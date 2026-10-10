@@ -41,14 +41,23 @@ Base = declarative_base()
 # 2. Database Models
 # -----------------------------------------------------------------------------
 
+class Merchant(Base):
+    __tablename__ = "merchants"
+
+    id: int = Column(Integer, primary_key=True, index=True)
+    name: str = Column(String, nullable=False)
+    merchant_type: str = Column(String, nullable=False)
+
+
 class Customer(Base):
     __tablename__ = "customers"
 
     id: int = Column(Integer, primary_key=True, index=True)
     name: str = Column(String, nullable=False)
     age: int = Column(Integer, nullable=False)
+    cibil_score: int = Column(Integer, nullable=False)
+    active_loans: str = Column(String, default="[]", nullable=False)  # JSON string
     existing_products: str = Column(String, default="[]", nullable=False)  # JSON string
-    credit_score: int = Column(Integer, nullable=False)
 
     transactions = relationship(
         "Transaction",
@@ -63,12 +72,20 @@ class Transaction(Base):
 
     id: int = Column(Integer, primary_key=True, index=True)
     customer_id: int = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    merchant_id: int = Column(Integer, ForeignKey("merchants.id"), nullable=False, index=True)
     amount: float = Column(Float, nullable=False)
-    merchant_name: str = Column(String, nullable=False)
     date: date = Column(SQLDate, nullable=False)
-    category: Optional[str] = Column(String, nullable=True)
 
     customer = relationship("Customer", back_populates="transactions")
+    merchant = relationship("Merchant", lazy="joined")
+
+    @property
+    def merchant_name(self) -> str:
+        return self.merchant.name if self.merchant else ""
+
+    @property
+    def category(self) -> str:
+        return self.merchant.merchant_type if self.merchant else ""
 
 
 def get_db():
@@ -86,6 +103,7 @@ def get_db():
 class TransactionResponse(BaseModel):
     id: int
     customer_id: int
+    merchant_id: int
     amount: float
     merchant_name: str
     date: date
@@ -98,14 +116,15 @@ class CustomerResponse(BaseModel):
     id: int
     name: str
     age: int
+    cibil_score: int
+    active_loans: List[str]
     existing_products: List[str]
-    credit_score: int
 
     model_config = ConfigDict(from_attributes=True)
 
-    @field_validator("existing_products", mode="before")
+    @field_validator("existing_products", "active_loans", mode="before")
     @classmethod
-    def parse_existing_products(cls, v):
+    def parse_json_arrays(cls, v):
         if isinstance(v, str):
             try:
                 parsed = json.loads(v)
@@ -121,17 +140,18 @@ class Customer360Response(BaseModel):
     id: int
     name: str
     age: int
+    cibil_score: int
+    active_loans: List[str]
     existing_products: List[str]
-    credit_score: int
     total_transactions: int
     total_spend: float
     transactions: List[TransactionResponse]
 
     model_config = ConfigDict(from_attributes=True)
 
-    @field_validator("existing_products", mode="before")
+    @field_validator("existing_products", "active_loans", mode="before")
     @classmethod
-    def parse_existing_products(cls, v):
+    def parse_json_arrays(cls, v):
         if isinstance(v, str):
             try:
                 parsed = json.loads(v)
@@ -183,20 +203,8 @@ class CustomerInsightResponse(BaseModel):
 
 
 # -----------------------------------------------------------------------------
-# 4. Synthetic Data Generation (Faker with High-Carbon & High-Utility Signals)
+# 4. Synthetic Data Generation (Faker with Deep Historical Patterns)
 # -----------------------------------------------------------------------------
-
-HIGH_CARBON_MERCHANTS = ["Shell", "BP", "Texaco"]
-HIGH_UTILITY_MERCHANTS = ["British Gas", "EDF"]
-GENERAL_MERCHANTS = [
-    ("Tesco", "Groceries", (15.0, 120.0)),
-    ("Sainsbury's", "Groceries", (12.0, 110.0)),
-    ("Marks & Spencer", "Groceries", (20.0, 130.0)),
-    ("Transport for London", "Public Transport", (3.5, 30.0)),
-    ("National Rail", "Public Transport", (12.0, 75.0)),
-    ("Amazon UK", "Retail", (15.0, 180.0)),
-    ("Costa Coffee", "Dining", (3.5, 25.0)),
-]
 
 GREEN_PRODUCT_OPTIONS = [
     [],
@@ -207,8 +215,7 @@ GREEN_PRODUCT_OPTIONS = [
     ["Eco Home Improvement"],
 ]
 
-
-def seed_database_if_empty(db: Session) -> None:
+def seed_deep_history(db: Session) -> None:
     customer_count = db.query(Customer).count()
     if customer_count > 0:
         return
@@ -218,71 +225,91 @@ def seed_database_if_empty(db: Session) -> None:
     random.seed(42)
 
     today = date.today()
-    created_customers: List[Customer] = []
 
-    # 1. Generate 50 Customers
+    # 1. Create 20 Fixed Merchants
+    merchants = []
+    merchant_data = [
+        ("Shell", "Fuel"), ("BP", "Fuel"), ("Texaco", "Fuel"),
+        ("British Gas", "Utilities"), ("EDF", "Utilities"),
+        ("Tesco", "Groceries"), ("Sainsbury's", "Groceries"), ("Marks & Spencer", "Groceries"),
+        ("Transport for London", "Public Transport"), ("National Rail", "Public Transport"),
+        ("Amazon UK", "Retail"), ("Costa Coffee", "Dining"),
+        ("Starbucks", "Dining"), ("ASDA", "Groceries"), ("Morrisons", "Groceries"),
+        ("Uber", "Transport"), ("Deliveroo", "Dining"), ("Apple Store", "Retail"),
+        ("John Lewis", "Retail"), ("Argos", "Retail")
+    ]
+    for name, mtype in merchant_data:
+        m = Merchant(name=name, merchant_type=mtype)
+        db.add(m)
+        merchants.append(m)
+    db.flush()
+
+    fuel_merchants = [m for m in merchants if m.merchant_type == "Fuel"]
+    utility_merchants = [m for m in merchants if m.merchant_type == "Utilities"]
+    other_merchants = [m for m in merchants if m.merchant_type not in ("Fuel", "Utilities")]
+
+    # 2. Generate 50 Customers with correlated ages, CIBIL and active loans
+    customers = []
     for _ in range(50):
+        age = random.randint(22, 75)
+        cibil = random.randint(300, 900)
+        
+        active_loans = []
+        if cibil > 750:
+            active_loans = random.choice([["Home Loan"], ["Home Loan", "Auto Loan"], ["Personal Loan"]])
+        elif cibil > 600:
+            active_loans = random.choice([["Personal Loan"], ["Auto Loan"], []])
+        else:
+            active_loans = random.choice([[], ["Payday Loan"]])
+            
         cust = Customer(
             name=fake.name(),
-            age=random.randint(22, 70),
-            credit_score=random.randint(550, 850),
+            age=age,
+            cibil_score=cibil,
+            active_loans=json.dumps(active_loans),
             existing_products=json.dumps(random.choice(GREEN_PRODUCT_OPTIONS))
         )
         db.add(cust)
-        created_customers.append(cust)
-
+        customers.append(cust)
     db.flush()
 
-    # 2. Generate exactly 20 transactions per customer with guaranteed carbon & utility signals
-    for cust in created_customers:
-        transactions: List[Transaction] = []
+    # 3. Generate Deep Transaction History
+    historical_years = [10, 8, 7, 6, 5, 4, 3, 2, 1]
+    recent_months = list(range(1, 13))
 
-        # Forced high-carbon fuel signals (3-5 transactions)
-        carbon_count = random.randint(3, 5)
-        for _ in range(carbon_count):
-            tx_date = today - timedelta(days=random.randint(1, 90))
-            transactions.append(
-                Transaction(
-                    customer_id=cust.id,
-                    amount=round(random.uniform(45.0, 110.0), 2),
-                    merchant_name=random.choice(HIGH_CARBON_MERCHANTS),
-                    date=tx_date,
-                    category="Fuel"
-                )
-            )
-
-        # Forced high-utility electricity/gas signals (2-4 transactions)
-        utility_count = random.randint(2, 4)
-        for _ in range(utility_count):
-            tx_date = today - timedelta(days=random.randint(1, 90))
-            transactions.append(
-                Transaction(
-                    customer_id=cust.id,
-                    amount=round(random.uniform(80.0, 240.0), 2),
-                    merchant_name=random.choice(HIGH_UTILITY_MERCHANTS),
-                    date=tx_date,
-                    category="Utilities"
-                )
-            )
-
-        # Remaining transactions to reach exactly 20 transactions
-        remaining_count = 20 - (carbon_count + utility_count)
-        for _ in range(remaining_count):
-            tx_date = today - timedelta(days=random.randint(1, 90))
-            merchant_name, category, (min_amt, max_amt) = random.choice(GENERAL_MERCHANTS)
-            transactions.append(
-                Transaction(
-                    customer_id=cust.id,
-                    amount=round(random.uniform(min_amt, max_amt), 2),
-                    merchant_name=merchant_name,
-                    date=tx_date,
-                    category=category
-                )
-            )
-
-        transactions.sort(key=lambda t: t.date, reverse=True)
-        db.add_all(transactions)
-
+    for cust in customers:
+        txs = []
+        
+        # Yearly checkpoints
+        for y in historical_years:
+            tx_date = today - timedelta(days=y * 365 + random.randint(-15, 15))
+            for _ in range(random.randint(2, 5)):
+                m = random.choice(merchants)
+                amt = round(random.uniform(10.0, 150.0), 2)
+                txs.append(Transaction(customer_id=cust.id, merchant_id=m.id, amount=amt, date=tx_date))
+                
+        # Monthly checkpoints
+        for m_ago in recent_months:
+            tx_date = today - timedelta(days=m_ago * 30 + random.randint(-5, 5))
+            # Force high carbon & utility signals
+            for _ in range(random.randint(1, 2)):
+                m = random.choice(fuel_merchants)
+                amt = round(random.uniform(45.0, 110.0), 2)
+                txs.append(Transaction(customer_id=cust.id, merchant_id=m.id, amount=amt, date=tx_date))
+                
+            for _ in range(random.randint(1, 2)):
+                m = random.choice(utility_merchants)
+                amt = round(random.uniform(80.0, 240.0), 2)
+                txs.append(Transaction(customer_id=cust.id, merchant_id=m.id, amount=amt, date=tx_date))
+                
+            for _ in range(random.randint(2, 5)):
+                m = random.choice(other_merchants)
+                amt = round(random.uniform(10.0, 150.0), 2)
+                txs.append(Transaction(customer_id=cust.id, merchant_id=m.id, amount=amt, date=tx_date))
+                
+        txs.sort(key=lambda t: t.date, reverse=True)
+        db.add_all(txs)
+        
     db.commit()
 
 
@@ -295,7 +322,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
-        seed_database_if_empty(db)
+        seed_deep_history(db)
         ml_predictor.train_mock_models(db)
     finally:
         db.close()
@@ -347,8 +374,9 @@ def get_customer_360(
         id=customer.id,
         name=customer.name,
         age=customer.age,
+        cibil_score=customer.cibil_score,
+        active_loans=customer.active_loans,
         existing_products=customer.existing_products,
-        credit_score=customer.credit_score,
         total_transactions=len(txs),
         total_spend=total_spend,
         transactions=txs
@@ -415,7 +443,7 @@ def get_customer_opportunities(
         "annual_fuel_spend": features.annual_fuel_spend,
         "annual_electricity_spend": features.annual_electricity_spend,
         "age": float(customer.age),
-        "credit_score": float(customer.credit_score),
+        "cibil_score": float(customer.cibil_score),
     }
 
     # 2. ML Propensity Scores & SHAP-mimic Reason Codes
@@ -483,7 +511,7 @@ def get_customer_insights(
         "annual_fuel_spend": features.annual_fuel_spend,
         "annual_electricity_spend": features.annual_electricity_spend,
         "age": float(customer.age),
-        "credit_score": float(customer.credit_score),
+        "cibil_score": float(customer.cibil_score),
     }
 
     # 2. ML Propensity Scores & SHAP Reason Codes

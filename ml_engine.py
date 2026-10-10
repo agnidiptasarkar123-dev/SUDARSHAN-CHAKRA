@@ -42,13 +42,13 @@ class MLPredictor:
                 float(agg.annual_fuel_spend),
                 float(agg.annual_electricity_spend),
                 float(cust.age),
-                float(cust.credit_score),
+                float(cust.cibil_score),
             ]
             features_list.append(vector)
 
             # Domain heuristic training labels
-            ev_label = 1 if (agg.annual_fuel_spend > 2500.0 and cust.credit_score >= 600) else 0
-            solar_label = 1 if (agg.annual_electricity_spend > 3500.0 and cust.credit_score >= 580) else 0
+            ev_label = 1 if (agg.annual_fuel_spend > 2500.0 and cust.cibil_score >= 600) else 0
+            solar_label = 1 if (agg.annual_electricity_spend > 3500.0 and cust.cibil_score >= 580) else 0
 
             y_ev_list.append(ev_label)
             y_solar_list.append(solar_label)
@@ -86,7 +86,7 @@ class MLPredictor:
             float(customer_features.get("annual_fuel_spend", 0.0)),
             float(customer_features.get("annual_electricity_spend", 0.0)),
             float(customer_features.get("age", 35.0)),
-            float(customer_features.get("credit_score", 700.0)),
+            float(customer_features.get("cibil_score", 700.0)),
         ]])
 
         ev_proba = self.ev_model.predict_proba(vector)[0]
@@ -110,14 +110,14 @@ class MLPredictor:
 
         fuel_spend = customer_features.get("annual_fuel_spend", 0.0)
         elec_spend = customer_features.get("annual_electricity_spend", 0.0)
-        credit_score = customer_features.get("credit_score", 0.0)
+        cibil_score = customer_features.get("cibil_score", 0.0)
 
         # EV Signals
         if fuel_spend > 2000.0:
             ev_reasons.append("HIGH_FUEL_SPEND")
         if fuel_spend > 3800.0:
             ev_reasons.append("EXCESSIVE_ICE_CARBON_INTENSITY")
-        if credit_score >= 700.0:
+        if cibil_score >= 700.0:
             ev_reasons.append("EXCELLENT_CREDIT_PROFILE")
         if not ev_reasons:
             ev_reasons.append("STANDARD_COMMUTE_PROFILE")
@@ -127,7 +127,7 @@ class MLPredictor:
             solar_reasons.append("HIGH_GRID_ELECTRICITY_COST")
         if elec_spend > 6000.0:
             solar_reasons.append("HIGH_DOMESTIC_POWER_CONSUMPTION")
-        if credit_score >= 680.0:
+        if cibil_score >= 680.0:
             solar_reasons.append("QUALIFIED_HOME_OWNER_PROFILE")
         if not solar_reasons:
             solar_reasons.append("STANDARD_RESIDENTIAL_LOAD")
